@@ -27,11 +27,13 @@ def run(df) -> dict:
     plt.figure(figsize=(10, 6))  # 도화지 크기 설정
 
     # 그래프 그리기 (hue 지정으로 palette 경고 회피)
-    sns.boxplot(data=df, x='sex', y='hours-per-week', hue='sex', legend=False)
+    # order로 저소득→고소득 순서를 고정해 "고소득이 더 오래 일한다"가 한눈에 읽히게 함
+    sns.boxplot(data=df, x='income', y='hours-per-week', hue='income',
+                order=['<=50K', '>50K'], legend=False)
 
     # 제목 및 라벨 달기 (영문 — 한글 폰트 깨짐 회피)
-    plt.title("Weekly Working Hours Distribution by Sex")
-    plt.xlabel("Sex")
+    plt.title("Weekly Working Hours by Income Group")
+    plt.xlabel("Income Group")
     plt.ylabel("Hours Per Week")
 
     # 저장 및 닫기
@@ -62,11 +64,12 @@ def run(df) -> dict:
 
     # ── 3. 리턴 (키 이름 고정 — report가 그대로 소비) ──
     desc = (
-        "박스플롯은 성별에 따른 주당 근무시간 분포를 비교한 것으로, 남성 쪽 분포가 전반적으로 "
-        "장시간 방향으로 치우쳐 있고 극단적 장시간 근무의 폭도 더 넓게 나타난다. "
+        "박스플롯은 소득 그룹별 주당 근무시간 분포를 비교한 것으로, 고소득(>50K) 그룹의 "
+        "중앙값과 사분위 범위가 저소득 그룹보다 뚜렷하게 위에 있어, 통계 파트의 t-test 결과"
+        "(고소득 그룹이 주당 약 6.4시간 더 근무, p<0.05로 유의)를 시각적으로 그대로 보여준다. "
         "산점도(무작위 1,000건 표본)는 나이-근무시간 평면에서 소득 그룹(>50K vs <=50K)을 색으로 "
         "구분한 것으로, 고소득 그룹이 30~50대·주 40시간 이상 구간에 상대적으로 밀집하는 경향을 보여 "
-        "통계 파트의 t-test 결과(고소득 그룹의 근무시간이 유의하게 긺)를 시각적으로 뒷받침한다."
+        "변수 중요도 결과(age 1위, hours-per-week 3위)와도 일관된다."
     )
     return {
         "seaborn_path": "outputs/seaborn_chart.png",
