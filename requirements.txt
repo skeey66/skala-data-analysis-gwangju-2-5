@@ -1,0 +1,13 @@
+# 초기 목록 — 환경 구성 후 최종본은 `pip freeze > requirements.txt` 로 고정 (재현성=신뢰성)
+pandas
+polars
+numpy
+matplotlib
+seaborn
+plotly
+scipy
+scikit-learn
+joblib
+jinja2
+requests
+tabulate
