@@ -17,3 +17,6 @@ outputs/*
 # ── 로그·OS 잡파일 ──
 *.log
 .DS_Store
+
+# -- CLAUDE.md --
+CLAUDE.md
