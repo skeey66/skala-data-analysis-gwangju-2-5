@@ -11,10 +11,16 @@ import logging
 
 import joblib
 import pandas as pd
+from pandas.api.types import is_numeric_dtype
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score, classification_report, f1_score
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    f1_score,
+    recall_score,
+)
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
@@ -25,7 +31,35 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 NUM_FEATURES = ["age", "capital-gain", "capital-loss", "hours-per-week"]
 CAT_FEATURES = ["workclass", "education", "marital-status",
                 "occupation", "relationship", "race", "sex"]
+TARGET_COL = "income"
+POSITIVE_LABEL = ">50K"      # 이진 타겟의 양성 클래스 (소수 클래스, 약 25%)
+TEST_SIZE = 0.2              # 학습:평가 = 8:2
+RANDOM_STATE = 42            # 분할·모델 재현성 고정
 MODEL_PATH = "outputs/model_pipeline.joblib"
+
+
+def _validate_input(df) -> None:
+    """학습에 필요한 데이터 구조와 값을 실행 전에 검증한다."""
+    if df is None or not hasattr(df, "columns"):
+        raise TypeError("Pandas DataFrame을 전달해야 합니다.")
+    if df.empty:
+        raise ValueError("학습할 데이터가 비어 있습니다.")
+
+    required = NUM_FEATURES + CAT_FEATURES + [TARGET_COL]
+    missing = [col for col in required if col not in df.columns]
+    if missing:
+        raise ValueError(f"필요 컬럼 누락: {missing}")
+
+    non_numeric = [col for col in NUM_FEATURES if not is_numeric_dtype(df[col])]
+    if non_numeric:
+        raise TypeError(f"수치형이어야 하는 컬럼: {non_numeric}")
+
+    null_cols = [col for col in required if df[col].isna().any()]
+    if null_cols:
+        raise ValueError(f"결측값이 포함된 컬럼: {null_cols}")
+
+    if df[TARGET_COL].nunique() < 2:   # 타겟 형식이 깨졌으면 즉시 중단
+        raise ValueError("타겟이 한 클래스뿐 — income 값 형식을 재확인할 것")
 
 
 def _build_preprocessor() -> ColumnTransformer:
@@ -36,42 +70,52 @@ def _build_preprocessor() -> ColumnTransformer:
     ])
 
 
+def _fit_and_eval(clf, X_train, y_train, X_test, y_test):
+    """전처리+분류기 파이프라인을 학습·평가해 (pipe, y_pred, accuracy, f1)을 반환한다.
+
+    RF·LogReg가 같은 전처리 조건에서 공정하게 비교되도록 구성을 한 곳에 모음.
+    """
+    pipe = Pipeline(steps=[
+        ("preprocessor", _build_preprocessor()),
+        ("classifier", clf),
+    ])
+    pipe.fit(X_train, y_train)
+    y_pred = pipe.predict(X_test)
+    return pipe, y_pred, accuracy_score(y_test, y_pred), f1_score(y_test, y_pred)
+
+
 def run(df) -> dict:
-    """ML 파이프라인 전체 실행 — 분할 → 학습 → 평가 → 중요도 → 저장 → 비교."""
+    """ML 파이프라인 전체 실행 — 검증 → 분할 → 학습 → 평가 → 중요도 → 저장 → 비교."""
 
-    # ── 1. X, y 준비 (②가정 방어: 필요한 컬럼이 실제로 있는지 먼저 확인) ──
-    required = set(NUM_FEATURES + CAT_FEATURES + ["income"])
-    missing = required - set(df.columns)
-    if missing:
-        raise ValueError(f"필요 컬럼 누락: {sorted(missing)}")
-
-    y = (df["income"] == ">50K").astype(int)   # 이진 타겟: >50K=1, <=50K=0
-    if y.nunique() < 2:                        # 타겟 형식이 깨졌으면 즉시 중단
-        raise ValueError("타겟이 한 클래스뿐 — income 값 형식을 재확인할 것")
+    # ── 1. 입력 검증 + X, y 준비 ──
+    _validate_input(df)
+    y = (df[TARGET_COL] == POSITIVE_LABEL).astype(int)   # 이진 타겟: >50K=1, <=50K=0
     X = df[NUM_FEATURES + CAT_FEATURES]
 
     # ── 2. 분할 — 클래스 불균형(약 75:25) 대응으로 stratify 필수 ──
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42, stratify=y)
-    logging.info(f"train {X_train.shape} / test {X_test.shape} (stratify 적용)")
+        X, y, test_size=TEST_SIZE, random_state=RANDOM_STATE, stratify=y)
+    logging.info(
+        "[모델 1/5] 데이터 분할 완료\n"
+        f"- train {X_train.shape} / test {X_test.shape} (stratify 적용)\n"
+        f"- 고소득(>50K) 비율: train {y_train.mean():.1%} / test {y_test.mean():.1%}"
+    )
 
-    # ── 3. 메인 모델: 전처리 + RandomForest 파이프라인 ──
-    pipe = Pipeline(steps=[
-        ("preprocessor", _build_preprocessor()),
-        ("classifier", RandomForestClassifier(
+    # ── 3. 메인 모델 학습·평가 — 불균형 데이터라 Accuracy와 F1을 함께 본다 ──
+    pipe, y_pred, accuracy, f1 = _fit_and_eval(
+        RandomForestClassifier(
             class_weight="balanced",   # 불균형 대응 (docs/decisions.md)
-            random_state=42, n_jobs=-1)),
-    ])
-    pipe.fit(X_train, y_train)
-
-    # ── 4. 평가 — 불균형 데이터라 Accuracy와 F1을 함께 본다 ──
-    y_pred = pipe.predict(X_test)
-    accuracy = accuracy_score(y_test, y_pred)
-    f1 = f1_score(y_test, y_pred)
+            random_state=RANDOM_STATE, n_jobs=-1),
+        X_train, y_train, X_test, y_test)
     clf_report = classification_report(y_test, y_pred, target_names=["<=50K", ">50K"])
-    logging.info(f"[RandomForest] Accuracy {accuracy:.4f} / F1 {f1:.4f}")
+    recall_high = recall_score(y_test, y_pred)   # 소수 클래스(>50K) recall — 과제 목적상 핵심 지표
+    logging.info(
+        "[모델 2/5] RandomForest 평가 완료\n"
+        f"- Accuracy {accuracy:.4f} / F1 {f1:.4f}\n"
+        f"- 소수 클래스(>50K) recall {recall_high:.4f} — class_weight='balanced' 효과"
+    )
 
-    # ── 5. 변수 중요도 Top5 — "연봉을 결정하는 진짜 범인" (주제 질문의 답) ──
+    # ── 4. 변수 중요도 Top5 — "연봉을 결정하는 진짜 범인" (주제 질문의 답) ──
     names = pipe.named_steps["preprocessor"].get_feature_names_out()
     imps = pipe.named_steps["classifier"].feature_importances_
     ser = pd.Series(imps, index=names)
@@ -82,39 +126,34 @@ def run(df) -> dict:
     top.index.name = "변수"
     top.name = "중요도(합산)"
     top_features_md = top.to_markdown()
-    logging.info(f"변수 중요도 Top5:\n{top.to_string()}")
+    logging.info(f"[모델 3/5] 변수 중요도 Top5:\n{top.to_string()}")
 
-    # ── 6. joblib 저장 + 재로딩 검증 (③연쇄: 검증 실패해도 결과 리턴은 유지) ──
+    # ── 5. joblib 저장 + 재로딩 검증 (③연쇄: 검증 실패해도 결과 리턴은 유지) ──
     joblib.dump(pipe, MODEL_PATH)
     try:
         loaded = joblib.load(MODEL_PATH)
         loaded.predict(X_test.iloc[:5])   # 저장본이 실제로 동작하는지 확인
-        logging.info(f"joblib 저장·재로딩 검증 완료: {MODEL_PATH}")
+        logging.info(f"[모델 4/5] joblib 저장·재로딩 검증 완료: {MODEL_PATH}")
     except Exception as e:
         logging.error(f"joblib 재로딩 검증 실패(파일은 저장됨): {e}")
 
-    # ── 7. 비교 모델: LogisticRegression (개별 try — 실패해도 메인 결과는 살림) ──
+    # ── 6. 비교 모델: LogisticRegression (개별 try — 실패해도 메인 결과는 살림) ──
     comparison_md = None
     try:
-        pipe_lr = Pipeline(steps=[
-            ("preprocessor", _build_preprocessor()),
-            ("classifier", LogisticRegression(
-                class_weight="balanced", max_iter=1000, random_state=42)),
-        ])
-        pipe_lr.fit(X_train, y_train)
-        y_pred_lr = pipe_lr.predict(X_test)
-        acc_lr = accuracy_score(y_test, y_pred_lr)
-        f1_lr = f1_score(y_test, y_pred_lr)
+        _, _, acc_lr, f1_lr = _fit_and_eval(
+            LogisticRegression(
+                class_weight="balanced", max_iter=1000, random_state=RANDOM_STATE),
+            X_train, y_train, X_test, y_test)
         comparison_md = (
             "| 모델 | Accuracy | F1-score |\n|---|---|---|\n"
             f"| RandomForest (메인) | {accuracy:.4f} | {f1:.4f} |\n"
             f"| LogisticRegression (비교) | {acc_lr:.4f} | {f1_lr:.4f} |"
         )
-        logging.info(f"[LogReg 비교] Accuracy {acc_lr:.4f} / F1 {f1_lr:.4f}")
+        logging.info(f"[모델 5/5] LogReg 비교 — Accuracy {acc_lr:.4f} / F1 {f1_lr:.4f}")
     except Exception as e:
         logging.error(f"비교 모델 실패 — 메인 결과만 리턴: {e}")
 
-    # ── 8. 리턴 (키 이름 고정 — report가 그대로 소비) ──
+    # ── 7. 리턴 (키 이름 고정 — report가 그대로 소비) ──
     return {
         "model_name": "RandomForestClassifier (class_weight='balanced') + 전처리 Pipeline",
         "accuracy": accuracy,
@@ -123,4 +162,4 @@ def run(df) -> dict:
         "model_path": MODEL_PATH,
         "top_features_md": top_features_md,
         "comparison_md": comparison_md,
-      }
+    }
