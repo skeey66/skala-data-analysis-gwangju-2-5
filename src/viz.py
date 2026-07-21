@@ -1,5 +1,5 @@
 """2단계 · 시각화 — Seaborn 정적 1개↑ + Plotly 인터랙티브 1개↑ (제목·축 레이블 필수!)
-담당: ______ / 브랜치: feat/viz
+담당: 김단빈 / 브랜치: feat/viz
 
 리턴 dict 키(변경 금지):
   seaborn_path : 저장된 정적 차트 경로 (str, outputs/ 아래)
@@ -9,27 +9,67 @@
 
 import logging
 
+import matplotlib.pyplot as plt
+import plotly.express as px
+import seaborn as sns
+
 
 def run(df) -> dict:
-    """시각화 전체 실행. 아래 TODO 순서대로 구현하세요."""
+    """시각화 전체 실행 — 컬럼 검증 → 정적 박스플롯 → 인터랙티브 산점도."""
 
-    # ── TODO 1. Seaborn 정적 차트 → outputs/seaborn_chart.png ──
-    #   예시 주제: 성별(또는 소득그룹)에 따른 주당 근무시간 분포 boxplot
-    #   ※ palette를 쓰려면 hue를 함께 지정할 것 (안 그러면 FutureWarning이 캡처에 찍힘):
-    #     sns.boxplot(data=df, x='sex', y='hours-per-week', hue='sex', legend=False)
-    #   ※ plt.title / plt.xlabel / plt.ylabel 필수 (채점 기준 명시)
-    #   ※ 라벨은 영문 권장 — 한글 폰트 깨짐 회피. 한글 필요 시 폰트 설정 먼저.
-    #   plt.tight_layout(); plt.savefig('outputs/seaborn_chart.png'); plt.close()
+    # ── 0. 컬럼 존재 검증 (②가정 방어: 없는 컬럼이면 즉시 명확한 에러) ──
+    required = {"sex", "hours-per-week", "age", "income"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"필요 컬럼 누락: {sorted(missing)}")
 
-    # ── TODO 2. Plotly 인터랙티브 차트 → outputs/plotly_chart.html ──
-    #   예시 주제: age vs hours-per-week 산점도, color='income'
-    #   ※ 대량 산점도는 df.sample(1000, random_state=42)로 샘플링 (렌더 성능)
-    #   ※ title=, labels= 로 제목·축 레이블 지정 필수
-    #   fig.write_html('outputs/plotly_chart.html')
+    # ── 1. Seaborn 정적 차트: 성별 주당 근무시간 분포 → outputs/seaborn_chart.png ──
+    plt.figure(figsize=(10, 6))  # 도화지 크기 설정
 
-    # ── TODO 3. 리턴 ──
-    #   return {"seaborn_path": "outputs/seaborn_chart.png",
-    #           "plotly_path": "outputs/plotly_chart.html",
-    #           "desc": "..."}
+    # 그래프 그리기 (hue 지정으로 palette 경고 회피)
+    sns.boxplot(data=df, x='sex', y='hours-per-week', hue='sex', legend=False)
 
-    raise NotImplementedError("feat/viz 브랜치에서 구현 후 이 줄을 삭제하세요")
+    # 제목 및 라벨 달기 (영문 — 한글 폰트 깨짐 회피)
+    plt.title("Weekly Working Hours Distribution by Sex")
+    plt.xlabel("Sex")
+    plt.ylabel("Hours Per Week")
+
+    # 저장 및 닫기
+    plt.tight_layout()
+    plt.savefig('outputs/seaborn_chart.png')
+    plt.close()
+    logging.info("Seaborn 박스플롯 저장 완료: outputs/seaborn_chart.png")
+
+    # ── 2. Plotly 인터랙티브 차트: 나이-근무시간 산점도(소득 그룹 색상) ──
+    # 렌더링 성능을 위해 표본 추출 (행 수가 1,000 미만이어도 안전하게)
+    n_sample = min(1000, len(df))
+    df_sampled = df.sample(n_sample, random_state=42)
+
+    fig = px.scatter(
+        df_sampled,
+        x='age',
+        y='hours-per-week',
+        color='income',
+        title="Age vs Hours Per Week by Income",
+        labels={
+            'age': 'Age',
+            'hours-per-week': 'Hours Per Week',
+            'income': 'Income Group'
+        }
+    )
+    fig.write_html('outputs/plotly_chart.html')
+    logging.info(f"Plotly 산점도 저장 완료: outputs/plotly_chart.html (표본 {n_sample:,}건)")
+
+    # ── 3. 리턴 (키 이름 고정 — report가 그대로 소비) ──
+    desc = (
+        "박스플롯은 성별에 따른 주당 근무시간 분포를 비교한 것으로, 남성 쪽 분포가 전반적으로 "
+        "장시간 방향으로 치우쳐 있고 극단적 장시간 근무의 폭도 더 넓게 나타난다. "
+        "산점도(무작위 1,000건 표본)는 나이-근무시간 평면에서 소득 그룹(>50K vs <=50K)을 색으로 "
+        "구분한 것으로, 고소득 그룹이 30~50대·주 40시간 이상 구간에 상대적으로 밀집하는 경향을 보여 "
+        "통계 파트의 t-test 결과(고소득 그룹의 근무시간이 유의하게 긺)를 시각적으로 뒷받침한다."
+    )
+    return {
+        "seaborn_path": "outputs/seaborn_chart.png",
+        "plotly_path": "outputs/plotly_chart.html",
+        "desc": desc,
+    }
