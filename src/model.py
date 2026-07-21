@@ -33,6 +33,7 @@ CAT_FEATURES = ["workclass", "education", "marital-status",
                 "occupation", "relationship", "race", "sex"]
 TARGET_COL = "income"
 POSITIVE_LABEL = ">50K"      # 이진 타겟의 양성 클래스 (소수 클래스, 약 25%)
+NEGATIVE_LABEL = "<=50K"
 TEST_SIZE = 0.2              # 학습:평가 = 8:2
 RANDOM_STATE = 42            # 분할·모델 재현성 고정
 MODEL_PATH = "outputs/model_pipeline.joblib"
@@ -40,26 +41,40 @@ MODEL_PATH = "outputs/model_pipeline.joblib"
 
 def _validate_input(df) -> None:
     """학습에 필요한 데이터 구조와 값을 실행 전에 검증한다."""
+    # 1) 입력 객체와 데이터 행 존재 여부를 먼저 확인한다.
     if df is None or not hasattr(df, "columns"):
         raise TypeError("Pandas DataFrame을 전달해야 합니다.")
     if df.empty:
         raise ValueError("학습할 데이터가 비어 있습니다.")
 
+    # 2) 학습에 필요한 컬럼이 모두 있는지 한 번에 확인한다.
     required = NUM_FEATURES + CAT_FEATURES + [TARGET_COL]
     missing = [col for col in required if col not in df.columns]
     if missing:
         raise ValueError(f"필요 컬럼 누락: {missing}")
 
+    # 3) StandardScaler를 적용할 컬럼은 반드시 수치형이어야 한다.
     non_numeric = [col for col in NUM_FEATURES if not is_numeric_dtype(df[col])]
     if non_numeric:
         raise TypeError(f"수치형이어야 하는 컬럼: {non_numeric}")
 
+    # 4) load.py에서 결측 제거를 마친 df_clean을 받으므로, 결측이 남아 있으면
+    # 파이프라인 앞 단계가 깨진 것이다 — 조용히 진행하지 않고 중단한다.
     null_cols = [col for col in required if df[col].isna().any()]
     if null_cols:
         raise ValueError(f"결측값이 포함된 컬럼: {null_cols}")
 
-    if df[TARGET_COL].nunique() < 2:   # 타겟 형식이 깨졌으면 즉시 중단
-        raise ValueError("타겟이 한 클래스뿐 — income 값 형식을 재확인할 것")
+    # 5) income 라벨에 오탈자·선행 공백·다른 파일 형식(">50K." 등)이 섞이면
+    # y가 한 클래스로 쏠려도 겉보기엔 정상 학습되므로 라벨 집합을 직접 검증한다.
+    labels = set(df[TARGET_COL].unique())
+    expected = {POSITIVE_LABEL, NEGATIVE_LABEL}
+    unexpected = labels - expected
+    if unexpected:
+        raise ValueError(f"income에 예상하지 못한 값이 있습니다: {sorted(unexpected)}")
+
+    missing_labels = expected - labels
+    if missing_labels:
+        raise ValueError(f"학습에 필요한 클래스가 없습니다: {sorted(missing_labels)}")
 
 
 def _build_preprocessor() -> ColumnTransformer:
